@@ -7,7 +7,6 @@
     
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/pocketbase@0.30.0-rc6/dist/pocketbase.umd.js"></script>
 
     <style>
         body, html { 
@@ -43,10 +42,14 @@
         <button class="action-btn" id="dropPinBtn">📍 Drop Pin at My Location</button>
     </div>
 
-    <script>
+    <script type="module">
+        import PocketBase from 'https://cdn.jsdelivr.net/npm/pocketbase@0.22.21/+esm';
+
+        // Initialize map centered roughly on the Tempe / ASU region
         const map = L.map('map', { zoomControl: false }).setView([33.4242, -111.9281], 16);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
 
+        // Live cloud instance database hook
         const pb = new PocketBase('https://worldfinder-worldfinder.hf.space');
         
         let currentUserLatLng = null;
@@ -55,7 +58,7 @@
         // GEOFENCE CONFIGURATION: Set maximum allowed distance in meters
         const MAX_RADIUS_METERS = 200; 
 
-        // Draw function
+        // Draw function handles visual popups and automated frontend fade-out timing
         function drawPinOnMap(pinData) {
             const createdTime = new Date(pinData.created); 
             const lifespan = 60 * 60 * 1000; 
@@ -79,23 +82,23 @@
             }
         }
 
-        // Fetch past markers
+        // Fetch past markers from the database instance
         async function loadExistingPins() {
             try {
                 const records = await pb.collection('pins').getList(1, 50, { sort: '-created' });
                 records.items.forEach(pinData => {
                     if (pinData.lat && pinData.lng) drawPinOnMap(pinData);
                 });
-            } catch (err) { console.log(err); }
+            } catch (err) { console.log("Error pulling historical pins:", err); }
         }
         loadExistingPins();
 
-        // Subscribe to real-time events
+        // Subscribe to real-time events broadcasted by PocketBase
         pb.collection('pins').subscribe('*', function (e) {
             if (e.action === 'create') drawPinOnMap(e.record);
         });
 
-        // Track live GPS hardware
+        // Track live hardware GPS location coordinates
         if (navigator.geolocation) {
             navigator.geolocation.watchPosition(
                 (position) => {
@@ -111,7 +114,7 @@
                         userLocationMarker.setLatLng(currentUserLatLng);
                     }
                 },
-                (error) => { console.log("GPS unavailable."); },
+                (error) => { console.log("GPS signal unavailable."); },
                 { enableHighAccuracy: true }
             );
         }
@@ -120,7 +123,7 @@
         async function sendPinToDatabase(message, lat, lng) {
             try {
                 await pb.collection('pins').create({ message: message, lat: lat, lng: lng });
-            } catch (err) { alert("Database offline!"); }
+            } catch (err) { alert("Database offline or pin rejected!"); }
         }
 
         // OPTION A: Drop directly at feet via the interface button (Always Allowed)
@@ -141,15 +144,15 @@
             const clickedLocation = e.latlng;
             const userLocation = L.latLng(currentUserLatLng[0], currentUserLatLng[1]);
 
-            // Leaflet returns the exact distance over the earth's surface in meters
+            // Calculate precise geographic distance over the earth surface in meters
             const distance = userLocation.distanceTo(clickedLocation);
 
             if (distance > MAX_RADIUS_METERS) {
                 alert(`Too far away! You can only drop pins within ${MAX_RADIUS_METERS} meters of your physical location. (You are currently ${Math.round(distance)}m away)`);
-                return; // Rejects and stops the execution loop completely
+                return; // Rejects entry completely
             }
 
-            // If within boundary radius, allow the pin to drop
+            // Allow prompt option if within circle
             const message = prompt("What's happening over there?");
             if (message) sendPinToDatabase(message, clickedLocation.lat, clickedLocation.lng);
         });
