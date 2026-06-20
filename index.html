@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pocketbase/0.21.1/pocketbase.umd.js"></script>
+    <script src="https://unpkg.com/pocketbase@0.30.0-rc6/dist/pocketbase.umd.js"></script>
 
     <style>
         body, html { 
@@ -49,16 +49,14 @@
         const map = L.map('map', { zoomControl: false }).setView([33.4242, -111.9281], 16);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
 
-        // Live cloud instance database hook
+        // Hook up to your live cloud database instance
         const pb = new PocketBase('https://worldfinder-worldfinder.hf.space');
         
         let currentUserLatLng = null;
         let userLocationMarker = null;
         
-        // GEOFENCE CONFIGURATION: Set maximum allowed distance in meters
         const MAX_RADIUS_METERS = 200; 
 
-        // Draw function handles visual popups and automated frontend fade-out timing
         function drawPinOnMap(pinData) {
             const createdTime = new Date(pinData.created); 
             const lifespan = 60 * 60 * 1000; 
@@ -82,7 +80,6 @@
             }
         }
 
-        // Fetch past markers from the database instance
         async function loadExistingPins() {
             try {
                 const records = await pb.collection('pins').getList(1, 50, { sort: '-created' });
@@ -93,12 +90,10 @@
         }
         loadExistingPins();
 
-        // Subscribe to real-time events broadcasted by PocketBase
         pb.collection('pins').subscribe('*', function (e) {
             if (e.action === 'create') drawPinOnMap(e.record);
         });
 
-        // Track live hardware GPS location coordinates
         if (navigator.geolocation) {
             navigator.geolocation.watchPosition(
                 (position) => {
@@ -119,40 +114,33 @@
             );
         }
 
-        // --- HELPER FUNCTION: SEND PIN TO SERVER ---
         async function sendPinToDatabase(message, lat, lng) {
             try {
                 await pb.collection('pins').create({ message: message, lat: lat, lng: lng });
             } catch (err) { alert("Database offline or pin rejected!"); }
         }
 
-        // OPTION A: Drop directly at feet via the interface button (Always Allowed)
         document.getElementById('dropPinBtn').addEventListener('click', () => {
             if (!currentUserLatLng) { alert("Waiting for GPS signal..."); return; }
             const message = prompt("What's happening right here?");
             if (message) sendPinToDatabase(message, currentUserLatLng[0], currentUserLatLng[1]);
         });
 
-        // OPTION B: Drop via direct Map Tap (Enforces Proximity Radius Limit)
         map.on('click', function(e) {
             if (!currentUserLatLng) {
                 alert("Can't verify your proximity because your device GPS is turned off.");
                 return;
             }
 
-            // Convert raw coordinates into Leaflet LatLng objects to use native distance math
             const clickedLocation = e.latlng;
             const userLocation = L.latLng(currentUserLatLng[0], currentUserLatLng[1]);
-
-            // Calculate precise geographic distance over the earth surface in meters
             const distance = userLocation.distanceTo(clickedLocation);
 
             if (distance > MAX_RADIUS_METERS) {
                 alert(`Too far away! You can only drop pins within ${MAX_RADIUS_METERS} meters of your physical location. (You are currently ${Math.round(distance)}m away)`);
-                return; // Rejects entry completely
+                return;
             }
 
-            // Allow prompt option if within circle
             const message = prompt("What's happening over there?");
             if (message) sendPinToDatabase(message, clickedLocation.lat, clickedLocation.lng);
         });
