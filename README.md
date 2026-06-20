@@ -1,2 +1,2 @@
 # Worldfinder
-Demo version of worldfinder
+Demo version of worldfinder.
