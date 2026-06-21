@@ -178,7 +178,7 @@
         console.log("Leaflet map canvas mounted.");
 
         // 2. Database Connection
-        const pb = new PocketBase('https://worldfinder-worldfinder.hf.space');
+        const pb = new PocketBase('https://worldfinder-worldfinder-hf-space.hf.space');
         
         let currentUserLatLng = null;
         let userLocationMarker = null;
@@ -204,12 +204,21 @@
         const currentDeviceSecret = localStorage.getItem('wf_device_secret');
         
         // Grab the first 15 characters to act as the public database user_id.
-        // Clean, safe, standard text string. Zero risk of browser crashing.
         const currentGuestID = currentDeviceSecret.substring(0, 15); 
         console.log("Secure Identity Anchored:", currentGuestID);
         
         // 4. Time-Aware Rendering Engine
         function drawPinOnMap(pinData) {
+            // SOFT DELETE CHECK: Clear marker from screen if flagged by owner
+            if (pinData.message === "DELETED_BY_OWNER") {
+                if (activeMarkers[pinData.id]) {
+                    map.removeLayer(activeMarkers[pinData.id]);
+                    delete activeMarkers[pinData.id];
+                    console.log(`Pin ${pinData.id} soft-deleted by owner instruction.`);
+                }
+                return;
+            }
+
             if (activeMarkers[pinData.id]) return;
 
             const createdTime = new Date(pinData.created); 
@@ -269,7 +278,7 @@
                     // Instead of deleting the record, we update it securely
                     await pb.collection('pins').update(pinId, {
                         message: "DELETED_BY_OWNER",
-                        user_id: currentGuestID // Passes the valid signature required by the rule
+                        user_id: currentGuestID // Passes verified cryptographic signature
                     });
                 } catch (err) { 
                     console.error("Deletion rejected by engine:", err); 
@@ -294,6 +303,7 @@
         function startLiveSync() {
             pb.collection('pins').subscribe('*', function (e) {
                 if (e.action === 'create') drawPinOnMap(e.record);
+                if (e.action === 'update') drawPinOnMap(e.record); // Sync soft-deletes in real time
                 if (e.action === 'delete') {
                     if (activeMarkers[e.record.id]) {
                         map.removeLayer(activeMarkers[e.record.id]);
