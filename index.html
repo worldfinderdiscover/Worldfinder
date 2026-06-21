@@ -71,8 +71,14 @@
         let userLocationMarker = null;
         const MAX_RADIUS_METERS = 200; 
 
+        // SMART TRACKING: Keeps an exact record of which pin IDs are currently drawn on screen
+        const activeMarkers = {};
+
         // 3. Render Tracking Pin Data
         function drawPinOnMap(pinData) {
+            // If this exact pin ID is already drawn on the map, don't touch it
+            if (activeMarkers[pinData.id]) return;
+
             const createdTime = new Date(pinData.created); 
             const lifespan = 60 * 60 * 1000; 
             const expTime = new Date(createdTime.getTime() + lifespan);
@@ -83,6 +89,7 @@
 
             if (millisecondsLeft <= -60000) return; 
 
+            // Create and render the new marker
             const marker = L.marker([pinData.lat, pinData.lng]).addTo(map).bindPopup(`
                 <div style="font-family: sans-serif;">
                     <strong>${pinData.message}</strong><br>
@@ -90,21 +97,30 @@
                 </div>
             `);
 
+            // Save this marker to our smart tracking object using its unique database ID
+            activeMarkers[pinData.id] = marker;
+
+            // Handle the real-time browser self-destruct countdown
             if (millisecondsLeft > 0) {
-                setTimeout(() => { map.removeLayer(marker); }, millisecondsLeft);
+                setTimeout(() => { 
+                    map.removeLayer(marker); 
+                    delete activeMarkers[pinData.id]; // Remove from tracking registry
+                }, millisecondsLeft);
             }
         }
 
         // 4. Synchronization Handlers
-        async function loadExistingPins() {
+        async function syncPinsPipeline() {
             try {
+                // Fetch the 50 most recent pins
                 const records = await pb.collection('pins').getList(1, 50, { sort: '-created' });
                 records.items.forEach(pinData => {
-                    if (pinData.lat && pinData.lng) drawPinOnMap(pinData);
+                    if (pinData.lat && pinData.lng) {
+                        drawPinOnMap(pinData);
+                    }
                 });
-                console.log("Existing map pins synchronized.");
             } catch (err) { 
-                console.log("Database fetch standby:", err); 
+                console.log("Sync loop standby:", err); 
             }
         }
 
@@ -112,29 +128,19 @@
             pb.collection('pins').subscribe('*', function (e) {
                 if (e.action === 'create') drawPinOnMap(e.record);
             }).catch(err => {
-                console.log("Live stream standby.");
+                console.log("Realtime subscription routing limited. Relying on high-speed delta loop.");
             });
         }
 
-        // Run data pipeline
-        loadExistingPins().then(() => {
+        // Run initial data population
+        syncPinsPipeline().then(() => {
             startLiveSync();
         });
 
-        // Background delta loop for mobile network drops (15s polling)
-        setInterval(async () => {
-            try {
-                const records = await pb.collection('pins').getList(1, 10, { sort: '-created' });
-                map.eachLayer((layer) => {
-                    if (layer instanceof L.Marker && layer !== userLocationMarker) {
-                        map.removeLayer(layer);
-                    }
-                });
-                records.items.forEach(pinData => drawPinOnMap(pinData));
-            } catch (e) { 
-                console.log("Fallback sync idle."); 
-            }
-        }, 15000);
+        // HIGH-SPEED SMART DELTA LOOP
+        // Instead of wiping the map every 15 seconds, we pull down fresh data every 2 seconds.
+        // The smart tracking object ensures new pins appear immediately without affecting old ones.
+        setInterval(syncPinsPipeline, 2000);
 
         // 5. Geolocation Core
         if (navigator.geolocation) {
@@ -160,7 +166,9 @@
         // 6. Output Operations
         async function sendPinToDatabase(message, lat, lng) {
             try {
-                await pb.collection('pins').create({ message: message, lat: lat, lng: lng });
+                const newRecord = await pb.collection('pins').create({ message: message, lat: lat, lng: lng });
+                // Instantly draw your own dropped pin locally so you get zero layout lag
+                drawPinOnMap(newRecord);
             } catch (err) { 
                 alert("Database transmission failed."); 
             }
