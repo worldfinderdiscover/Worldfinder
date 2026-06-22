@@ -1,5 +1,5 @@
 // ==========================================
-// WORLDFINDER CORE ENGINE: IDENTITY & SYNC
+// WORLDFINDER CORE ENGINE: IDENTITY & CONFIG
 // ==========================================
 
 const CONFIG = {
@@ -17,6 +17,7 @@ let appState = {
 };
 
 const pb = new PocketBase(CONFIG.POCKETBASE_URL);
+pb.autoCancellation(false); // Ensure background polling doesn't choke active streams
 const activeMarkers = {};
 
 function initDeviceIdentity() {
@@ -30,6 +31,129 @@ function initDeviceIdentity() {
     appState.userSecret = existingSecret;
     appState.userId = existingSecret.substring(0, 15);
     console.log(`👤 Anonymous Signature: wf_guest_${appState.userId}`);
+}
+
+// ==========================================
+// INTERACTIVE HUD & RENDERING ENGINES (Declared First)
+// ==========================================
+
+function renderProximityFeed() {
+    const feedContainer = document.getElementById('proximity-feed-list');
+    if (!feedContainer) return;
+
+    // Completely removed the closed gate check so list components can generate context instantly
+    feedContainer.innerHTML = "";
+
+    const activePins = Object.values(activeMarkers)
+        .filter(m => m.wFPayload)
+        .map(m => {
+            return {
+                text: m.wFPayload.message,
+                label: m.wFPayload.label,
+                timeStr: m.wFPayload.expTimeString,
+                latlng: m.getLatLng()
+            };
+        });
+
+    if (activePins.length === 0) {
+        feedContainer.innerHTML = `
+            <p style="color: #666; font-size: 13px; text-align: center; margin-top: 4px; padding: 20px 0;">
+                No active pulses in the Tempe area right now. Go drop one!
+            </p>`;
+        return;
+    }
+
+    activePins.forEach(pin => {
+        const row = document.createElement('div');
+        row.style.background = '#11141d';
+        row.style.border = '1px solid rgba(255,255,255,0.05)';
+        row.style.borderRadius = '12px';
+        row.style.padding = '12px';
+        row.style.marginBottom = '10px';
+        row.style.cursor = 'pointer';
+        row.style.transition = 'background 0.2s';
+
+        row.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <span style="color: #00e5ff; font-size: 10px; font-weight: bold; text-transform: uppercase;">${pin.label}</span>
+                <span style="color: rgba(255,255,255,0.4); font-size: 10px;">⏱️ Til ${pin.timeStr}</span>
+            </div>
+            <p style="margin: 0; font-size: 13px; color: #fff; font-weight: 500;">${pin.text}</p>
+        `;
+
+        row.addEventListener('click', () => {
+            if (appState.map) {
+                appState.map.flyTo(pin.latlng, 18, { animate: true, duration: 1.0 });
+                Object.values(activeMarkers).find(m => m.getLatLng().equals(pin.latlng))?.openPopup();
+            }
+        });
+
+        row.addEventListener('mouseenter', () => row.style.background = 'rgba(255,255,255,0.03)');
+        row.addEventListener('mouseleave', () => row.style.background = '#11141d');
+
+        feedContainer.appendChild(row);
+    });
+}
+
+function initHudInteractions() {
+    const btnDrop = document.getElementById('btn-drop-pulse');
+    const btnVibe = document.getElementById('btn-catch-vibe');
+    const drawerVibe = document.getElementById('drawer-vibe');
+    const drawerDrop = document.getElementById('inputPanel'); 
+
+    document.getElementById('action-pill').style.pointerEvents = 'auto';
+    if (drawerVibe) drawerVibe.style.pointerEvents = 'auto';
+    if (drawerDrop) drawerDrop.style.pointerEvents = 'auto';
+
+    btnDrop.addEventListener('click', () => {
+        btnDrop.classList.add('active');
+        btnVibe.classList.remove('active');
+        if (drawerVibe) drawerVibe.classList.remove('open');
+        
+        if (appState.currentCoords.lat && appState.map) {
+            appState.map.flyTo([appState.currentCoords.lat, appState.currentCoords.lng], 17, {
+                animate: true,
+                duration: 1.0
+            });
+            if (typeof openInputDrawer === "function") {
+                openInputDrawer(appState.currentCoords.lat, appState.currentCoords.lng);
+            }
+        } else {
+            alert("Waiting for GPS telemetry signal...");
+        }
+    });
+
+    btnVibe.addEventListener('click', () => {
+        btnVibe.classList.add('active');
+        btnDrop.classList.remove('active');
+        
+        if (typeof closeInputDrawer === "function") closeInputDrawer();
+        if (drawerVibe) drawerVibe.classList.add('open');
+
+        if (appState.map) {
+            appState.map.flyTo([33.4242, -111.9281], 15, {
+                animate: true,
+                duration: 1.0
+            });
+        }
+
+        renderProximityFeed();
+    });
+
+    const vibeHandle = drawerVibe ? drawerVibe.querySelector('.drawer-handle') : null;
+    if (vibeHandle) {
+        vibeHandle.style.cursor = 'pointer';
+        vibeHandle.style.padding = '14px 0'; 
+        vibeHandle.addEventListener('click', () => {
+            if (drawerVibe) drawerVibe.classList.remove('open');
+            btnVibe.classList.remove('active');
+            btnDrop.classList.add('active');
+            
+            if (appState.currentCoords.lat && appState.map) {
+                appState.map.flyTo([appState.currentCoords.lat, appState.currentCoords.lng], 17, { animate: true });
+            }
+        });
+    }
 }
 
 // ==========================================
@@ -95,16 +219,11 @@ function drawPinOnMap(pinData) {
         return;
     }
     
-    // If the marker already exists on our map canvas, just update its raw payload state
     if (activeMarkers[pinData.id]) {
-        const hours = pinData.duration_hours || 1;
-        let label = 'Live Pulse (Free)';
-        if (hours === 6) label = 'Pro Spot';
-        else if (hours === 24) label = 'Anchor Spot';
-        else if (hours === 168) label = 'Landmark Event';
-        
-        activeMarkers[pinData.id].wFPayload.message = pinData.message;
-        renderProximityFeed();
+        if (activeMarkers[pinData.id].wFPayload && activeMarkers[pinData.id].wFPayload.message !== pinData.message) {
+            activeMarkers[pinData.id].wFPayload.message = pinData.message;
+            renderProximityFeed();
+        }
         return;
     }
 
@@ -147,6 +266,8 @@ function drawPinOnMap(pinData) {
     `);
     
     activeMarkers[pinData.id] = marker;
+    
+    // Now perfectly clean and visible to the scope engine:
     renderProximityFeed();
 
     setTimeout(() => { 
@@ -162,25 +283,26 @@ async function deletePinPermanently(pinId) {
     if (confirm("Do you want to clear this pin from the live map?")) {
         try {
             await pb.collection('pins').update(pinId, { message: "DELETED_BY_OWNER", user_id: appState.userId });
+            if (activeMarkers[pinId]) {
+                appState.map.removeLayer(activeMarkers[pinId]);
+                delete activeMarkers[pinId];
+            }
+            renderProximityFeed();
         } catch (err) { console.error(err); }
     }
 }
 
 async function syncPinsPipeline() {
     try {
-        // Fetch fresh instances using basic HTTP get lists
         const records = await pb.collection('pins').getList(1, 50, { sort: '-created' });
         
-        // 1. Match incoming stream records to map layers
         records.items.forEach(pinData => { 
             if (pinData.lat && pinData.lng) drawPinOnMap(pinData); 
         });
         
-        // 2. SAFE CLEANUP: Remove map pins that have been wiped from the server table 
         const serverIds = records.items.map(item => item.id);
         Object.keys(activeMarkers).forEach(localId => {
             if (!serverIds.includes(localId)) {
-                // Safeguard: verify the marker layer actually exists on the map before trying to remove it
                 if (activeMarkers[localId] && appState.map && appState.map.hasLayer(activeMarkers[localId])) {
                     appState.map.removeLayer(activeMarkers[localId]);
                 }
@@ -188,7 +310,6 @@ async function syncPinsPipeline() {
             }
         });
 
-        // 3. Force the feed list to refresh with the clean data
         renderProximityFeed();
     } catch (err) { 
         console.log("Telemetry Sync Interval Warning (Handled):", err); 
@@ -198,152 +319,33 @@ async function syncPinsPipeline() {
 function startLiveSync() {
     pb.collection('pins').subscribe('*', function (e) {
         console.log("🔥 REALTIME EVENT RECEIVED:", e.action, e.record);
-        
         if (e.action === 'create' || e.action === 'update') {
-            drawPinOnMap(e.record); // This draws the pin AND updates the list now
+            drawPinOnMap(e.record);
         }
         if (e.action === 'delete') {
             if (activeMarkers[e.record.id]) {
                 appState.map.removeLayer(activeMarkers[e.record.id]);
                 delete activeMarkers[e.record.id];
             }
-            renderProximityFeed(); // Force instant real-time removal
+            renderProximityFeed();
         }
     }).catch(err => console.error("SSE Stream error:", err));
 }
 
 // ==========================================
-// INTERACTIVE HUD FLUID DYNAMICS ENGINE
+// UNIFIED BOOTSTRAPPER
 // ==========================================
 
-function initHudInteractions() {
-    const btnDrop = document.getElementById('btn-drop-pulse');
-    const btnVibe = document.getElementById('btn-catch-vibe');
-    const drawerVibe = document.getElementById('drawer-vibe');
-    const drawerDrop = document.getElementById('inputPanel'); 
-
-    document.getElementById('action-pill').style.pointerEvents = 'auto';
-    if (drawerVibe) drawerVibe.style.pointerEvents = 'auto';
-    if (drawerDrop) drawerDrop.style.pointerEvents = 'auto';
-
-    btnDrop.addEventListener('click', () => {
-        btnDrop.classList.add('active');
-        btnVibe.classList.remove('active');
-        if (drawerVibe) drawerVibe.classList.remove('open');
-        
-        if (appState.currentCoords.lat && appState.map) {
-            appState.map.flyTo([appState.currentCoords.lat, appState.currentCoords.lng], 17, {
-                animate: true,
-                duration: 1.0
-            });
-            if (typeof openInputDrawer === "function") {
-                openInputDrawer(appState.currentCoords.lat, appState.currentCoords.lng);
-            }
-        } else {
-            alert("Waiting for GPS telemetry signal...");
-        }
-    });
-
-    btnVibe.addEventListener('click', () => {
-    btnVibe.classList.add('active');
-    btnDrop.classList.remove('active');
-    
-    if (typeof closeInputDrawer === "function") closeInputDrawer();
-    if (drawerVibe) drawerVibe.classList.add('open'); // 1. Panel slides up
-
-    if (appState.map) {
-        appState.map.flyTo([33.4242, -111.9281], 15, {
-            animate: true,
-            duration: 1.0
-        });
-    }
-
-    // 🔥 THE FIX: Force the feed to render right now because the gate is now OPEN!
-    renderProximityFeed(); 
-});
-
-    const vibeHandle = drawerVibe ? drawerVibe.querySelector('.drawer-handle') : null;
-    if (vibeHandle) {
-        vibeHandle.style.cursor = 'pointer';
-        vibeHandle.style.padding = '14px 0'; 
-        vibeHandle.addEventListener('click', () => {
-            if (drawerVibe) drawerVibe.classList.remove('open');
-            btnVibe.classList.remove('active');
-            btnDrop.classList.add('active');
-            
-            if (appState.currentCoords.lat && appState.map) {
-                appState.map.flyTo([appState.currentCoords.lat, appState.currentCoords.lng], 17, { animate: true });
-            }
-        });
-    }
-}
-
-function renderProximityFeed() {
-    const feedContainer = document.getElementById('proximity-feed-list');
-    if (!feedContainer) return;
-
-
-    feedContainer.innerHTML = "";
-
-    const activePins = Object.values(activeMarkers)
-        .filter(m => m.wFPayload)
-        .map(m => {
-            return {
-                text: m.wFPayload.message,
-                label: m.wFPayload.label,
-                timeStr: m.wFPayload.expTimeString,
-                latlng: m.getLatLng()
-            };
-        });
-
-    if (activePins.length === 0) {
-        feedContainer.innerHTML = `
-            <p style="color: #666; font-size: 13px; text-align: center; margin-top: 4px; padding: 20px 0;">
-                No active pulses in the Tempe area right now. Go drop one!
-            </p>`;
-        return;
-    }
-
-    activePins.forEach(pin => {
-        const row = document.createElement('div');
-        row.style.background = '#11141d';
-        row.style.border = '1px solid rgba(255,255,255,0.05)';
-        row.style.borderRadius = '12px';
-        row.style.padding = '12px';
-        row.style.marginBottom = '10px';
-        row.style.cursor = 'pointer';
-        row.style.transition = 'background 0.2s';
-
-        row.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-                <span style="color: #00e5ff; font-size: 10px; font-weight: bold; text-transform: uppercase;">${pin.label}</span>
-                <span style="color: rgba(255,255,255,0.4); font-size: 10px;">⏱️ Til ${pin.timeStr}</span>
-            </div>
-            <p style="margin: 0; font-size: 13px; color: #fff; font-weight: 500;">${pin.text}</p>
-        `;
-
-        row.addEventListener('click', () => {
-            if (appState.map) {
-                appState.map.flyTo(pin.latlng, 18, { animate: true, duration: 1.0 });
-                Object.values(activeMarkers).find(m => m.getLatLng().equals(pin.latlng))?.openPopup();
-            }
-        });
-
-        row.addEventListener('mouseenter', () => row.style.background = 'rgba(255,255,255,0.03)');
-        row.addEventListener('mouseleave', () => row.style.background = '#11141d');
-
-        feedContainer.appendChild(row);
-    });
-}
-
-// Unified Bootstrapper
 document.addEventListener('DOMContentLoaded', () => {
     initDeviceIdentity();
     initCanvasMap();
     trackUserLocation();
     initHudInteractions();
-    syncPinsPipeline().then(() => { startLiveSync(); });
     
-    // Fallback Polling Intervaller to sync state if websockets disconnect
-    setInterval(syncPinsPipeline, 3000);
+    // Fire synchronization sequence instantly
+    syncPinsPipeline();
+    startLiveSync();
+    
+    // Rapid background fallback loop (keeps client completely aligned)
+    setInterval(syncPinsPipeline, 2500);
 });
