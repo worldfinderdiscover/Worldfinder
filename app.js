@@ -126,10 +126,17 @@ function drawPinOnMap(pinData) {
     `);
     activeMarkers[pinData.id] = marker;
 
+    // Live browser self-destruct pruning sequence
     setTimeout(() => { 
         if (activeMarkers[pinData.id]) {
             appState.map.removeLayer(marker); 
             delete activeMarkers[pinData.id];
+            
+            // Real-time addition: Instantly wipe expired rows out of view without refreshing
+            const drawerVibe = document.getElementById('drawer-vibe');
+            if (drawerVibe && drawerVibe.classList.contains('open')) {
+                renderProximityFeed();
+            }
         }
     }, millisecondsLeft);
 }
@@ -146,15 +153,29 @@ async function syncPinsPipeline() {
     try {
         const records = await pb.collection('pins').getList(1, 50, { sort: '-created' });
         records.items.forEach(pinData => { if (pinData.lat && pinData.lng) drawPinOnMap(pinData); });
+        
+        // Real-time addition: update the panel list if it is currently open
+        const drawerVibe = document.getElementById('drawer-vibe');
+        if (drawerVibe && drawerVibe.classList.contains('open')) {
+            renderProximityFeed();
+        }
     } catch (err) { console.log(err); }
 }
 
 function startLiveSync() {
     pb.collection('pins').subscribe('*', function (e) {
-        if (e.action === 'create' || e.action === 'update') drawPinOnMap(e.record);
+        if (e.action === 'create' || e.action === 'update') {
+            drawPinOnMap(e.record);
+        }
         if (e.action === 'delete' && activeMarkers[e.record.id]) {
             appState.map.removeLayer(activeMarkers[e.record.id]);
             delete activeMarkers[e.record.id];
+        }
+        
+        // Real-time addition: Instantly refresh the sliding feed stream on any database shift
+        const drawerVibe = document.getElementById('drawer-vibe');
+        if (drawerVibe && drawerVibe.classList.contains('open')) {
+            renderProximityFeed();
         }
     }).catch(err => console.log(err));
 }
