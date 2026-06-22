@@ -196,22 +196,20 @@ async function syncPinsPipeline() {
 }
 
 function startLiveSync() {
-    // Subscribe directly to collection updates via SSE stream channel connection
     pb.collection('pins').subscribe('*', function (e) {
-        console.log("Real-time stream activity payload discovered:", e);
+        console.log("🔥 REALTIME EVENT RECEIVED:", e.action, e.record);
+        
         if (e.action === 'create' || e.action === 'update') {
-            drawPinOnMap(e.record);
+            drawPinOnMap(e.record); // This draws the pin AND updates the list now
         }
         if (e.action === 'delete') {
             if (activeMarkers[e.record.id]) {
                 appState.map.removeLayer(activeMarkers[e.record.id]);
                 delete activeMarkers[e.record.id];
             }
-            renderProximityFeed();
+            renderProximityFeed(); // Force instant real-time removal
         }
-    }).catch(err => {
-        console.error("Realtime subscription channel disrupted. Falling back to polling loops.", err);
-    });
+    }).catch(err => console.error("SSE Stream error:", err));
 }
 
 // ==========================================
