@@ -168,10 +168,31 @@ async function deletePinPermanently(pinId) {
 
 async function syncPinsPipeline() {
     try {
+        // Fetch fresh instances using basic HTTP get lists
         const records = await pb.collection('pins').getList(1, 50, { sort: '-created' });
-        records.items.forEach(pinData => { if (pinData.lat && pinData.lng) drawPinOnMap(pinData); });
+        
+        // 1. Match incoming stream records to map layers
+        records.items.forEach(pinData => { 
+            if (pinData.lat && pinData.lng) drawPinOnMap(pinData); 
+        });
+        
+        // 2. SAFE CLEANUP: Remove map pins that have been wiped from the server table 
+        const serverIds = records.items.map(item => item.id);
+        Object.keys(activeMarkers).forEach(localId => {
+            if (!serverIds.includes(localId)) {
+                // Safeguard: verify the marker layer actually exists on the map before trying to remove it
+                if (activeMarkers[localId] && appState.map && appState.map.hasLayer(activeMarkers[localId])) {
+                    appState.map.removeLayer(activeMarkers[localId]);
+                }
+                delete activeMarkers[localId];
+            }
+        });
+
+        // 3. Force the feed list to refresh with the clean data
         renderProximityFeed();
-    } catch (err) { console.log(err); }
+    } catch (err) { 
+        console.log("Telemetry Sync Interval Warning (Handled):", err); 
+    }
 }
 
 function startLiveSync() {
