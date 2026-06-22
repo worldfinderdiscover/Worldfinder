@@ -67,7 +67,7 @@ function initCanvasMap() {
     const asuCenter = [33.4242, -111.9281];
 
     // Initialize the Leaflet map container with Canvas performance flag turned ON
-    appState.map = L.map('map-viewport', {
+    appState.map = L.map('map', {
         preferCanvas: true,       // Force drawing directly to canvas (crucial for cheap phones)
         zoomControl: false,       // Hide default desktop buttons to save screen space
         attributionControl: false // Hide small text to maximize map real estate
